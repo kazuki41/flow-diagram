@@ -1,6 +1,6 @@
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
 generator client {
@@ -22,8 +22,8 @@ model User {
 model FlowDiagram {
   id        String   @id @default(uuid())
   title     String   @default("無題のフロー図")
-  nodes     Json
-  edges     Json
+  nodes     String
+  edges     String
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
