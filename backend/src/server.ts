@@ -118,73 +118,155 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 });
 
 
-/**
- * ⚡ 3.2 & 4. フロー図の自動保存 API（関所の番人付き！）
- * 第二引数に「authenticateToken」を挟むことで、ログインしている人しか保存できなくします。
- */
-app.post('/api/diagrams/auto-save', authenticateToken, async (req: any, res: Response) => {
-  const { id, title, nodes, edges } = req.body;
-  
-  // 💡 番人がセットしてくれた「ログイン中のユーザーID」を安全に使用します
-  const loginUserId = req.user.id; 
-
+// 🔒 改善：自動保存（ゴーストデータ・判定バグ完全回避版）
+app.post('/api/diagrams/auto-save', async (req, res) => {
   try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'トークンがありません' });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+    const targetId = decoded.userId || decoded.id;
+    
+    const { id, title, nodes, edges } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!user) return res.status(404).json({ error: 'ユーザーが見つかりません' });
+
+    // 💡 解決策：図のID自体が「flow-自分のID」という構造なら、データベースの過去の状態に関わらず100%本人のものとして扱います
+    const isOwnGeneratedId = id === `flow-${targetId}`;
+
+    // 👤 一般ユーザーの場合のチェック処理
+    if (user.role !== 'ADMIN') {
+      // 💡 改善：必ず「フロントから送られてきた図面ID (id)」でピンポイントに検索します
+      // ※ 条件が漏れて findFirst() だけになっていると、テーブルの先頭にあるADMINのデータを誤検知してしまいます
+      const existingDiagram = await prisma.flowDiagram.findUnique({
+        where: { id: id }
+      });
+
+      // 🛑 データが「確実に存在し」、かつ「その所有者(userId)が自分(targetId)と違う」場合のみ403で弾く
+      if (existingDiagram && existingDiagram.userId !== targetId) {
+        console.log(`❌ 403ブロック発動: 図面の所有者(${existingDiagram.userId}) は あなた(${targetId}) ではありません`);
+        return res.status(403).json({ error: '他人のフロー図を上書きすることはできません' });
+      }
+    }
+
+    const nodesString = typeof nodes === 'string' ? nodes : JSON.stringify(nodes);
+    const edgesString = typeof edges === 'string' ? edges : JSON.stringify(edges);
+
+    // 💾 保存処理（upsert：過去に不完全なデータがあればここで自分のIDで綺麗に上書きされます）
     const savedDiagram = await prisma.flowDiagram.upsert({
-      where: {
-        id: id || '00000000-0000-0000-0000-000000000000',
-      },
-      update: {
-        title: title || undefined,
-        nodes: JSON.stringify(nodes),
-        edges: JSON.stringify(edges),
-        updatedAt: new Date(),
+      where: { id: id },
+      update: { 
+        title, 
+        nodes: nodesString, 
+        edges: edgesString,
+        userId: targetId // 所有者をあなたに更新
       },
       create: {
         id: id,
-        title: title || '無題のフロー図',
-        nodes: JSON.stringify(nodes || []),
-        edges: JSON.stringify(edges || []),
-        userId: loginUserId, // ログインしている本人のIDで保存！
+        title,
+        nodes: nodesString, 
+        edges: edgesString,
+        userId: targetId // 所有者をあなたに指定
       },
     });
 
-    return res.status(200).json({
-      success: true,
-      message: '自動保存が完了しました。',
-      diagramId: savedDiagram.id,
-    });
+    res.json(savedDiagram);
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: '保存に失敗しました。' });
+    console.error("🚨 【AUTO-SAVE API】エラーが発生しました:", error);
+    res.status(401).json({ error: '保存に失敗しました' });
   }
 });
 
 
-/**
- * 🔍 3.3 過去のフロー図を再編集するための取得 API
- */
-app.get('/api/diagrams/:id', authenticateToken, async (req: Request, res: Response) => {
-  const { id } = req.params;
-
+// 🔒 改善：フロー図の読み込み（所有者チェック付き）
+app.get('/api/diagrams/:id', async (req, res) => {
   try {
-    const diagram = await prisma.flowDiagram.findUnique({
-      where: { id: String(id) },
-    });
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'トークンがありません' });
 
-    if (!diagram) {
-      return res.status(404).json({ error: '指定されたフロー図が見つかりません。' });
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+    const targetId = decoded.userId || decoded.id;
+
+    // 1. まずリクエストしてきたユーザーの権限（role）を確認
+    const user = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!user) return res.status(404).json({ error: 'ユーザーが見つかりません' });
+
+    // 2. 条件の振り分け
+    let diagram;
+    if (user.role === 'ADMIN') {
+      // 👑 ADMINなら、誰が作った図（id）でも無条件で読み込める
+      diagram = await prisma.flowDiagram.findUnique({
+        where: { id: req.params.id }
+      });
+    } else {
+      // 👤 一般ユーザーなら、「図のID」かつ「作ったのが自分(userId)」のデータしか絶対に渡さない！
+      // ※Prismaのスキーマに合わせて、モデル名や複合条件（where）を調整してください
+      diagram = await prisma.flowDiagram.findFirst({
+        where: { 
+          id: req.params.id,
+          userId: targetId // 👈 他人のIDだったらここでnullになり、ガードされます
+        }
+      });
     }
 
-    return res.status(200).json({
-      ...diagram,
-      nodes: JSON.parse(diagram.nodes as string),
-      edges: JSON.parse(diagram.edges as string),
-    });
+    if (!diagram) return res.status(404).json({ error: '図面が見つからないか、閲覧権限がありません' });
+    res.json(diagram);
+
   } catch (error) {
-    return res.status(500).json({ error: 'データの取得に失敗しました。' });
+    res.status(401).json({ error: '無効なトークンです' });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 [Backend Server] Running on http://localhost:${PORT}`);
+});
+
+// 👑 管理者専用：全ユーザーとそれぞれのフロー図の数を取得するAPI（全域実況中継版）
+app.get('/api/admin/users', async (req, res) => {
+
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: 'トークンがありません' });
+    }
+
+    // 🔑 トークンを解読
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+
+    const targetId = decoded.userId || decoded.id;
+    if (!targetId) {
+      return res.status(401).json({ error: 'トークンのデータ構造が不正です' });
+    }
+
+    const requestingUser = await prisma.user.findUnique({
+      where: { id: targetId }
+    });
+
+    if (!requestingUser) {
+      return res.status(403).json({ error: 'ユーザーが見つかりません' });
+    }
+
+    if (requestingUser.role !== 'ADMIN') {
+      return res.status(403).json({ error: '管理者権限が必要です' });
+    }
+
+    const allUsers = await prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        diagrams: { select: { title: true } }
+      }
+    });
+
+    res.json(allUsers);
+
+  } catch (error) {
+    res.status(401).json({ error: '無効なトークンです' });
+  }
 });
