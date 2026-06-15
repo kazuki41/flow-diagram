@@ -25,7 +25,7 @@ export default function AdminPage() {
     }
 
    // 👑 管理者専用APIを叩く
-   fetch('http://localhost:5000/api/admin/users', {
+   fetch('/api/admin/users', {
     headers: { 'Authorization': `Bearer ${token}` }
   })
     .then((res) => {

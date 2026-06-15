@@ -93,7 +93,7 @@ export default function FlowPage() {
       try {
         const diagramId = currentUser.role === 'ADMIN' ? 'test-flow-1' : `flow-${currentUser.id}`;
 
-        const res = await fetch(`http://localhost:5000/api/diagrams/${diagramId}`, {
+        const res = await fetch(`/api/diagrams/${diagramId}`, {
           method: 'GET',
           headers: { 'Authorization': `Bearer ${token}` },
         });
@@ -232,7 +232,7 @@ export default function FlowPage() {
 
     setSaveStatus('saving');
     try {
-      const res = await fetch('http://localhost:5000/api/diagrams/auto-save', {
+      const res = await fetch('/api/diagrams/auto-save', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
