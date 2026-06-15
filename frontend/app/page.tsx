@@ -98,6 +98,13 @@ export default function FlowPage() {
           headers: { 'Authorization': `Bearer ${token}` },
         });
 
+        if (res.status === 401) {
+          localStorage.removeItem('flow_auth_token');
+          localStorage.removeItem('flow_user');
+          router.push('/login');
+          return;
+        }
+
         if (res.ok) {
           const data = await res.json();
           setTitle(data.title || '無題のフロー図');
@@ -241,6 +248,13 @@ export default function FlowPage() {
         body: JSON.stringify({ id: diagramId, title: currentTitle, nodes: currentNodes, edges: currentEdges }),
       });
 
+      if (res.status === 401) {
+        localStorage.removeItem('flow_auth_token');
+        localStorage.removeItem('flow_user');
+        router.push('/login');
+        return;
+      }
+
       if (res.ok) {
         setSaveStatus('saved');
         setTimeout(() => setSaveStatus('idle'), 2000);
@@ -250,7 +264,7 @@ export default function FlowPage() {
     } catch {
       setSaveStatus('idle');
     }
-  }, [user]); // 💡 user情報が変わったら関数を再生成
+  }, [user, router]); // 💡 user情報が変わったら関数を再生成
 
   // 🕒 変化検知自動保存（引数から存在しない id を排除）
   useEffect(() => {

@@ -125,7 +125,7 @@ app.post('/api/diagrams/auto-save', async (req, res) => {
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'トークンがありません' });
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
     const targetId = decoded.userId || decoded.id;
     
     const { id, title, nodes, edges } = req.body;
@@ -187,7 +187,7 @@ app.get('/api/diagrams/:id', async (req, res) => {
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'トークンがありません' });
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
     const targetId = decoded.userId || decoded.id;
 
     // 1. まずリクエストしてきたユーザーの権限（role）を確認
@@ -235,7 +235,7 @@ app.get('/api/admin/users', async (req, res) => {
     }
 
     // 🔑 トークンを解読
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
 
     const targetId = decoded.userId || decoded.id;
     if (!targetId) {
